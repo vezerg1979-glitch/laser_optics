@@ -79,8 +79,58 @@ jobs:
           key: buildozer-local-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
           restore-keys: buildozer-local-${{ runner.os }}-
 
+      # Полный лог пишем в файл: настоящая ошибка p4a печатается
+      # задолго до финального «Command failed», и в веб-интерфейсе
+      # Actions её легко пропустить.
+      # Версию build-tools buildozer выбирать не даёт — он берёт самую свежую
+      # (37.0.0) и проверяет утилиту aidl, которой там уже нет. Поэтому SDK
+      # собираем сами с build-tools 33.0.2, где aidl на месте, а в spec стоит
+      # android.skip_update = True, чтобы buildozer не обновил его до 37.
+      - name: Подготовка Android SDK с фиксированными build-tools
+        run: |
+          set -e
+          SDK="$HOME/.buildozer/android/platform/android-sdk"
+          if [ ! -x "$SDK/build-tools/33.0.2/aidl" ]; then
+            mkdir -p "$SDK"
+            cd "$HOME"
+            wget -q -O cmdline.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-6514223_latest.zip
+            unzip -q -o cmdline.zip -d "$SDK"
+            rm -f cmdline.zip
+            yes | "$SDK/tools/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null || true
+            "$SDK/tools/bin/sdkmanager" --sdk_root="$SDK" \
+              "platform-tools" "build-tools;33.0.2" "platforms;android-34" > /dev/null
+          fi
+          echo "Установленные build-tools:"
+          ls "$SDK/build-tools"
+          test -x "$SDK/build-tools/33.0.2/aidl" \
+            && echo "aidl на месте — проверка buildozer пройдёт" \
+            || { echo "aidl отсутствует"; exit 1; }
+
       - name: Сборка debug APK
-        run: buildozer -v android debug
+        id: build
+        run: |
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Показать место ошибки
+        if: failure()
+        run: |
+          echo "=================== СТРОКИ С ОШИБКАМИ ==================="
+          grep -nE "^\[ERROR\]|Traceback|error:|Error:|fatal error|No such file|md5|sha256|checksum" \
+            build.log | tail -n 60 || true
+          echo "=============== 200 СТРОК ПЕРЕД ПАДЕНИЕМ ================"
+          grep -n "Command failed" build.log | head -n1 | cut -d: -f1 \
+            | xargs -I{} sh -c 'start=$(( {} > 200 ? {} - 200 : 1 )); sed -n "${start},{}p" build.log'
+
+      - name: Полный лог сборки
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Публикация APK
         uses: actions/upload-artifact@v4

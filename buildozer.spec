@@ -18,7 +18,9 @@ version = 1.0.0
 # весь расчёт выполняется на чистом Python
 requirements = python3,kivy==2.3.1
 
-orientation = all
+# Список допустимых ориентаций (buildozer 1.5 не принимает "all"):
+# portrait, landscape, portrait-reverse, landscape-reverse
+orientation = portrait, landscape
 fullscreen = 0
 
 # --- Android ----------------------------------------------------------------

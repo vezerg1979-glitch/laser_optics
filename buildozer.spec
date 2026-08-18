@@ -9,7 +9,7 @@ package.domain = ru.vpglaser
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
 source.include_patterns = app/*.py
-source.exclude_dirs = tests,.github,bin,.buildozer
+source.exclude_dirs = tests,.github,bin,.buildozer,p4a-recipes
 source.exclude_patterns = tests/*,*.spec.bak
 
 version = 1.0.0
@@ -48,6 +48,14 @@ android.accept_sdk_license = True
 android.skip_update = True
 android.release_artifact = aab
 android.debug_artifact = apk
+
+# Версия python-for-android фиксируется, иначе buildozer тянет master,
+# и любое изменение в нём ломает сборку без изменений в проекте.
+p4a.branch = v2026.05.09
+
+# Локальный рецепт kivy без сетевой цепочки requests/urllib3/certifi —
+# см. пояснение в p4a-recipes/kivy/__init__.py
+p4a.local_recipes = ./p4a-recipes
 
 [buildozer]
 

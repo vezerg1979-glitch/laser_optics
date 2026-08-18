@@ -81,6 +81,7 @@ app/geometry.py          контуры детали, разделки, пров
 app/beamview.py          отрисовка схемы на канве Kivy
 app/ui.py                интерфейс: вкладки «Параметры», «Результаты», «Схема»
 tests/test_optics.py     сверка с исходной книгой Excel
+p4a-recipes/kivy/        локальный рецепт Kivy без сетевых зависимостей
 buildozer.spec           конфигурация сборки
 .github/workflows/       автосборка APK
 ```

@@ -72,20 +72,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 cython==0.29.36
 
-      # Кэш экономит 20–40 минут на повторных сборках
-      - name: Кэш Android SDK/NDK
-        uses: actions/cache@v4
+      # Кэш экономит 20–40 минут на повторных сборках.
+      # Восстанавливаем всегда, а сохраняем только после успешной сборки:
+      # обычный actions/cache записывает кэш и при падении, из-за чего
+      # недособранное состояние переносится в следующие прогоны.
+      - name: Кэш Android SDK/NDK (восстановление)
+        id: cache-global
+        uses: actions/cache/restore@v4
         with:
           path: ~/.buildozer
-          key: buildozer-global-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-global-v2-${{ runner.os }}-
+          key: buildozer-global-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-global-v3-${{ runner.os }}-
 
-      - name: Кэш сборки p4a
-        uses: actions/cache@v4
+      - name: Кэш сборки p4a (восстановление)
+        id: cache-local
+        uses: actions/cache/restore@v4
         with:
           path: .buildozer
-          key: buildozer-local-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-local-v2-${{ runner.os }}-
+          key: buildozer-local-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-local-v3-${{ runner.os }}-
+
+      # p4a создаёт временный venv командой `hostpython -m venv venv` поверх
+      # уже существующего каталога. Если venv пришёл из кэша, ensurepip
+      # кладёт туда свой pip (25.3), а рядом остаются файлы обновлённого
+      # pip (26.x) от прошлого прогона. Получается смесь двух версий, и
+      # следующий же `pip install -U pip` падает с
+      # ImportError: cannot import name 'BuildDependencyInstallError'.
+      # Каталог одноразовый и пересоздаётся за секунды — удаляем его.
+      - name: Удалить venv из кэша
+        run: |
+          rm -rf .buildozer/android/platform/build-*/build/venv
+          echo "временные venv удалены"
 
       # Полный лог пишем в файл: настоящая ошибка p4a печатается
       # задолго до финального «Command failed», и в веб-интерфейсе
@@ -139,6 +156,20 @@ jobs:
           path: build.log
           retention-days: 30
           if-no-files-found: ignore
+
+      - name: Кэш Android SDK/NDK (сохранение)
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+
+      - name: Кэш сборки p4a (сохранение)
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: .buildozer
+          key: buildozer-local-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
 
       - name: Публикация APK
         uses: actions/upload-artifact@v4

@@ -38,13 +38,21 @@ jobs:
 
       # В Ubuntu 24.04 (noble) пакетов libtinfo5, libncurses5-dev
       # и libncursesw5-dev больше нет — используем актуальные имена.
+      # libltdl-dev обязателен: он даёт /usr/share/aclocal/ltdl.m4, где
+      # определён макрос LT_SYS_SYMBOL_USCORE. Без него autogen.sh рецепта
+      # libffi падает с «possibly undefined macro». Пакет числится в
+      # Recommends для libtool, поэтому --no-install-recommends его отсекает
+      # и ставить его нужно явно.
       - name: Системные пакеты
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git zip unzip autoconf automake libtool libtool-bin pkg-config \
-            zlib1g-dev libncurses-dev libffi-dev libssl-dev \
+            git zip unzip autoconf automake libtool libtool-bin libltdl-dev \
+            pkg-config zlib1g-dev libncurses-dev libffi-dev libssl-dev \
             build-essential ccache patchelf
+          test -f /usr/share/aclocal/ltdl.m4 \
+            && echo "ltdl.m4 на месте — libffi соберётся" \
+            || { echo "ltdl.m4 отсутствует"; exit 1; }
 
       # Отдельные утилиты Android SDK (aidl из старых build-tools) слинкованы
       # с libtinfo.so.5. Ставим её вручную из архива jammy; если недоступна —

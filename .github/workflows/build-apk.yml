@@ -1,0 +1,86 @@
+name: Сборка APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Тесты расчётного ядра
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Прогон тестов
+        run: python tests/test_optics.py
+
+  build:
+    name: Сборка APK
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Системные пакеты
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip autoconf automake libtool libtool-bin pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev build-essential ccache
+
+      - name: Buildozer и Cython
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer==1.5.0 cython==0.29.36
+
+      # Кэш экономит 20–40 минут на повторных сборках
+      - name: Кэш Android SDK/NDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-global-${{ runner.os }}-
+
+      - name: Кэш сборки p4a
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: buildozer-local-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-local-${{ runner.os }}-
+
+      - name: Сборка debug APK
+        run: buildozer -v android debug
+
+      - name: Имя артефакта
+        id: apk
+        run: echo "path=$(ls bin/*.apk | head -n1)" >> "$GITHUB_OUTPUT"
+
+      - name: Публикация APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: laseroptics-debug-apk
+          path: bin/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Приложить APK к релизу
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/*.apk

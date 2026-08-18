@@ -36,13 +36,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # В Ubuntu 24.04 (noble) пакетов libtinfo5, libncurses5-dev
+      # и libncursesw5-dev больше нет — используем актуальные имена.
       - name: Системные пакеты
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git zip unzip autoconf automake libtool libtool-bin pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-            cmake libffi-dev libssl-dev build-essential ccache
+            zlib1g-dev libncurses-dev libffi-dev libssl-dev \
+            build-essential ccache patchelf
+
+      # Отдельные утилиты Android SDK (aidl из старых build-tools) слинкованы
+      # с libtinfo.so.5. Ставим её вручную из архива jammy; если недоступна —
+      # сборка продолжается, современные build-tools обходятся без неё.
+      - name: libtinfo5 для утилит Android SDK
+        continue-on-error: true
+        run: |
+          if ! dpkg -s libtinfo5 >/dev/null 2>&1; then
+            DEB=libtinfo5_6.3-2ubuntu0.1_amd64.deb
+            wget -q "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/$DEB"
+            sudo dpkg -i "$DEB" || sudo apt-get -f install -y
+            rm -f "$DEB"
+          fi
 
       - name: Buildozer и Cython
         run: |
@@ -66,10 +81,6 @@ jobs:
 
       - name: Сборка debug APK
         run: buildozer -v android debug
-
-      - name: Имя артефакта
-        id: apk
-        run: echo "path=$(ls bin/*.apk | head -n1)" >> "$GITHUB_OUTPUT"
 
       - name: Публикация APK
         uses: actions/upload-artifact@v4

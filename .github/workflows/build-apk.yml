@@ -77,15 +77,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-global-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-global-${{ runner.os }}-
+          key: buildozer-global-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-global-v2-${{ runner.os }}-
 
       - name: Кэш сборки p4a
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-local-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-local-${{ runner.os }}-
+          key: buildozer-local-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-local-v2-${{ runner.os }}-
 
       # Полный лог пишем в файл: настоящая ошибка p4a печатается
       # задолго до финального «Command failed», и в веб-интерфейсе

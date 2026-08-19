@@ -54,19 +54,6 @@ jobs:
             && echo "ltdl.m4 на месте — libffi соберётся" \
             || { echo "ltdl.m4 отсутствует"; exit 1; }
 
-      # Отдельные утилиты Android SDK (aidl из старых build-tools) слинкованы
-      # с libtinfo.so.5. Ставим её вручную из архива jammy; если недоступна —
-      # сборка продолжается, современные build-tools обходятся без неё.
-      - name: libtinfo5 для утилит Android SDK
-        continue-on-error: true
-        run: |
-          if ! dpkg -s libtinfo5 >/dev/null 2>&1; then
-            DEB=libtinfo5_6.3-2ubuntu0.1_amd64.deb
-            wget -q "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/$DEB"
-            sudo dpkg -i "$DEB" || sudo apt-get -f install -y
-            rm -f "$DEB"
-          fi
-
       - name: Buildozer и Cython
         run: |
           python -m pip install --upgrade pip
@@ -169,6 +156,23 @@ jobs:
         with:
           path: .buildozer
           key: buildozer-local-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+
+      # Сведения об APK: помогают понять, почему он не ставится на телефон
+      - name: Сведения об APK
+        run: |
+          set -e
+          APK=$(ls bin/*.apk | head -n1)
+          echo "Файл:   $APK"
+          echo "Размер: $(du -h "$APK" | cut -f1)"
+          AAPT="$HOME/.buildozer/android/platform/android-sdk/build-tools/33.0.2/aapt"
+          if [ -x "$AAPT" ]; then
+            "$AAPT" dump badging "$APK" | grep -E \
+              "^package|sdkVersion|targetSdkVersion|native-code|application-label" || true
+          fi
+          echo "Подпись:"
+          unzip -l "$APK" | grep -E "META-INF/.*\.(RSA|DSA|EC)" \
+            && echo "  APK подписан debug-ключом" \
+            || echo "  ВНИМАНИЕ: подпись не найдена, установка невозможна"
 
       - name: Публикация APK
         uses: actions/upload-artifact@v4

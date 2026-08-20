@@ -7,27 +7,90 @@ import json
 import os
 
 from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.spinner import Spinner
-from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem
-from kivy.uix.textinput import TextInput
 
-from .beamview import BeamView, SCHEME_COLORS
-from .optics import (
-    POWER_UNITS,
-    SPEED_UNITS,
-    Scheme,
-    Workpiece,
-    calculate,
+from . import theme as th
+from .beamview import BeamView
+from .optics import POWER_UNITS, SPEED_UNITS, Scheme, Workpiece, calculate
+from .widgets import (
+    Card,
+    ChoiceRow,
+    NavButton,
+    RaisedButton,
+    StepperField,
+    flash,
+    parse_number,
 )
 
 N_SCHEMES = 5
+
+# Шаг стрелок и минимум для каждого параметра схемы
+SCHEME_FIELDS = [
+    ("Длина волны, мкм", "wavelength_um", 0.01, 0.0, 3),
+    ("Диаметр волокна, мкм", "fiber_diameter_um", 10.0, 0.0, 0),
+    ("BPP, мм·мрад", "bpp_mm_mrad", 0.1, 0.0, 2),
+    ("Коллиматор, мм", "collimator_mm", 5.0, 0.0, 1),
+    ("Фокусатор, мм", "focusator_mm", 5.0, 0.0, 1),
+    ("Положение фокуса, мм", "focus_position_mm", 0.5, None, 1),
+    ("Угол наклона луча, °", "tilt_angle_deg", 0.5, None, 1),
+]
+
+WP_PLATE = [
+    ("Толщина детали, мм", "thickness_mm", 0.5, 0.0, 1),
+    ("Ширина слева, мм", "width_left_mm", 1.0, 0.0, 1),
+    ("Ширина справа, мм", "width_right_mm", 1.0, 0.0, 1),
+    ("Зазор, мм", "gap_mm", 0.1, 0.0, 2),
+    ("Угол скоса левой кромки, °", "bevel_left_deg", 0.5, None, 1),
+    ("Угол скоса правой кромки, °", "bevel_right_deg", 0.5, None, 1),
+    ("Смещение стыка, мм", "joint_offset_mm", 0.1, None, 2),
+]
+
+WP_WIRE = [
+    ("Диаметр проволоки, мм", "wire_diameter_mm", 0.1, 0.0, 2),
+    ("Смещение проволоки, мм", "wire_offset_mm", 0.1, None, 2),
+]
+
+WP_NOZZLE = [
+    ("Диаметр верхний, мм", "nozzle_d_upper_mm", 0.5, 0.0, 1),
+    ("Диаметр нижний, мм", "nozzle_d_lower_mm", 0.1, 0.0, 2),
+    ("Общая высота, мм", "nozzle_height_mm", 1.0, 0.0, 1),
+    ("Высота конуса, мм", "nozzle_cone_mm", 0.5, 0.0, 1),
+    ("Смещение сопла, мм", "nozzle_offset_mm", 0.1, None, 2),
+    ("Зазор сопло—деталь, мм", "nozzle_gap_mm", 0.5, 0.0, 1),
+]
+
+WP_VIEW = [
+    ("Требуемое пятно, мм", "target_spot_mm", 0.5, 0.0, 2),
+    ("Максимальный Y, мм", "y_max_mm", 5.0, None, 1),
+    ("Минимальный Y, мм", "y_min_mm", 5.0, None, 1),
+]
+
+RESULT_ROWS = [
+    ("Диаметр пятна в фокусе, мм", "spot_focus_mm", "%.3f"),
+    ("Диаметр пятна на поверхности, мм", "spot_surface_mm", "%.3f"),
+    ("Диаметр пятна в корне шва, мм", "spot_root_mm", "%.3f"),
+    ("Длина перетяжки, мм", "waist_length_mm", "%.2f"),
+    ("Длина Рэлея, мм", "rayleigh_mm", "%.2f"),
+    ("Увеличение оптики", "magnification", "%.3f"),
+    ("Параметр M²", "m2", "%.2f"),
+    ("Расходимость (полный угол), мрад", "divergence_full_mrad", "%.1f"),
+    ("Диаметр пучка на линзе, мм", "beam_on_lens_mm", "%.2f"),
+    ("Сдвиг фокуса на 1 мм коллиматора, мм", "focus_shift_per_mm", "%.2f"),
+    ("Расфокусировка под заданное пятно, мм", "required_defocus_mm", "%.1f"),
+    ("Мощность, Вт", "power_w", "%.0f"),
+    ("Скорость, мм/с", "speed_mm_s", "%.2f"),
+    ("Плотность мощности в фокусе, Вт/см²", "power_density_focus", "%.3g"),
+    ("Плотность мощности на поверхности, Вт/см²",
+     "power_density_surface", "%.3g"),
+    ("Плотность мощности на линзе, Вт/см²", "power_density_lens", "%.3g"),
+    ("Погонная энергия, Дж/мм", "linear_energy_j_mm", "%.1f"),
+]
 
 
 def fmt_density(value):
@@ -41,217 +104,152 @@ def fmt_density(value):
     return "%.0f Вт/см²" % value
 
 
-def _f(text, default=0.0):
-    """Мягкий разбор числа: принимает и точку, и запятую."""
-    try:
-        return float(str(text).replace(",", ".").strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def numeric_filter(text, from_undo, get_current):
-    """
-    Фильтр ввода вещественного числа со знаком.
-
-    Пропускает цифры, один разделитель дробной части (точку или запятую)
-    и минус — но только первым символом. Стандартный input_filter="float"
-    минус не пропускает вовсе, а он нужен постоянно: положение фокуса под
-    поверхностью, наклон луча в другую сторону, отрицательный скос кромки.
-    """
-    current = get_current()
-    out = []
-    for ch in text:
-        if ch.isdigit():
-            out.append(ch)
-        elif ch in ".," and not any(c in current for c in ".,"):
-            out.append(".")
-            current += "."
-        elif ch == "-" and not current and not out:
-            out.append("-")
-    return "".join(out)
-
-
-class Field(BoxLayout):
-    """Строка «подпись — поле ввода — смена знака»."""
-
-    def __init__(self, caption, value, on_change, signed=True,
-                 on_focus=None, **kwargs):
-        super().__init__(orientation="horizontal", size_hint_y=None,
-                         height=dp(44), spacing=dp(4), **kwargs)
-        self._on_change = on_change
-        self.add_widget(Label(text=caption, halign="left", valign="middle",
-                              size_hint_x=0.52, font_size=dp(13),
-                              text_size=(None, dp(42)),
-                              shorten=True, shorten_from="right"))
-        self.input = TextInput(
-            text=str(value), multiline=False, input_type="number",
-            size_hint_x=0.36 if signed else 0.48,
-            font_size=dp(15), padding=[dp(8), dp(11)],
-            input_filter=lambda t, u: numeric_filter(
-                t, u, lambda: self.input.text))
-        self.input.bind(text=lambda inst, val: on_change(val))
-        if on_focus is not None:
-            self.input.bind(focus=lambda inst, val: on_focus(self, val))
-        self.add_widget(self.input)
-
-        if signed:
-            # Цифровая клавиатура Android не показывает минус, поэтому
-            # знак меняется кнопкой — это работает на любой раскладке.
-            btn = Button(text="±", size_hint_x=0.12, font_size=dp(17))
-            btn.bind(on_release=lambda *a: self.toggle_sign())
-            self.add_widget(btn)
-
-    def toggle_sign(self):
-        text = self.input.text.strip()
-        self.input.text = text[1:] if text.startswith("-") else "-" + text
-
-    def set(self, value):
-        self.input.text = str(value)
-
-
-class ChoiceField(BoxLayout):
-    """Строка «подпись — выпадающий список»."""
-
-    def __init__(self, caption, values, value, on_change, **kwargs):
-        super().__init__(orientation="horizontal", size_hint_y=None,
-                         height=dp(42), spacing=dp(6), **kwargs)
-        self.add_widget(Label(text=caption, halign="left", valign="middle",
-                              size_hint_x=0.62, font_size=dp(13),
-                              text_size=(None, dp(40)),
-                              shorten=True, shorten_from="right"))
-        self.spinner = Spinner(text=str(value), values=[str(v) for v in values],
-                               size_hint_x=0.38, font_size=dp(14))
-        self.spinner.bind(text=lambda inst, val: on_change(val))
-        self.add_widget(self.spinner)
-
-    def set(self, value):
-        self.spinner.text = str(value)
-
-
-class SectionLabel(Label):
-    def __init__(self, text, **kwargs):
-        super().__init__(text="[b]%s[/b]" % text, markup=True,
-                         size_hint_y=None, height=dp(36), halign="left",
-                         valign="bottom", font_size=dp(15), **kwargs)
-        self.bind(size=lambda inst, val: setattr(inst, "text_size", val))
-
-
-class MainUI(TabbedPanel):
-    """Три вкладки: параметры, результаты, схема."""
+class MainUI(BoxLayout):
+    """Корневой виджет: три раздела и нижняя навигация."""
 
     def __init__(self, storage_dir: str, **kwargs):
-        super().__init__(do_default_tab=False, tab_width=dp(120), **kwargs)
+        super().__init__(orientation="vertical", **kwargs)
         self.storage_dir = storage_dir
-        self.schemes = [Scheme(name="Схема %d" % (i + 1)) for i in range(N_SCHEMES)]
-        # по умолчанию заполнена только первая схема
+        self.schemes = [Scheme(name="Схема %d" % (i + 1))
+                        for i in range(N_SCHEMES)]
         for s in self.schemes[1:]:
             s.collimator_mm = 0.0
             s.focusator_mm = 0.0
         self.workpiece = Workpiece()
         self.active = 0
+        self.section = 0
         self._updating = False
+        self._prev_summary = ["", "", ""]
         self._load()
+        self._build()
 
-        self._build_input_tab()
-        self._build_result_tab()
-        self._build_view_tab()
+    # ----------------------------------------------------------- построение
+
+    def _build(self):
+        self.clear_widgets()
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(*th.c("bg"))
+            self._bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync_bg, size=self._sync_bg)
+
+        self.body = BoxLayout()
+        self.add_widget(self.body)
+
+        nav = BoxLayout(size_hint_y=None, height=dp(60), padding=dp(4))
+        self.nav_buttons = []
+        for i, (glyph, caption) in enumerate(
+                (("params", "Параметры"), ("table", "Результаты"),
+                 ("beam", "Схема"))):
+            btn = NavButton(glyph, caption,
+                            lambda idx=i: self.show_section(idx))
+            self.nav_buttons.append(btn)
+            nav.add_widget(btn)
+        self.add_widget(nav)
+
+        self._build_input()
+        self._build_results()
+        self._build_view()
+        self.show_section(self.section)
         self.refresh()
 
-    # ------------------------------------------------------------------ ввод
+    def _sync_bg(self, *args):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+
+    def show_section(self, index):
+        self.section = index
+        self.body.clear_widgets()
+        self.body.add_widget(
+            (self.input_root, self.result_root, self.view_root)[index])
+        for i, btn in enumerate(self.nav_buttons):
+            btn.set_selected(i == index)
+
+    # ----------------------------------------------------------------- ввод
 
     def _scheme_label(self, index):
-        """Пункт списка схем: заполненные помечены и снабжены краткой сводкой."""
         s = self.schemes[index]
+        mark = "•" if s.is_valid else "·"
+        color = th.scheme_markup(index) if s.is_valid else th.markup("text_dim")
         if not s.is_valid:
-            return "%s  —  не заполнена" % s.name
+            return "%s  %s — не заполнена" % (mark, s.name)
         dz = s.focus_position_mm
-        return "%s  •  %g/%g, фокус %s мм" % (
-            s.name, s.focusator_mm, s.collimator_mm,
+        return "%s  %s • %g/%g, фокус %s мм" % (
+            mark, s.name, s.focusator_mm, s.collimator_mm,
             "%g" % dz if dz == 0 else "%+g" % dz)
 
-    def _build_input_tab(self):
-        tab = TabbedPanelItem(text="Параметры")
-        root = BoxLayout(orientation="vertical")
+    def _build_input(self):
+        self.input_root = BoxLayout(orientation="vertical")
 
-        top = BoxLayout(size_hint_y=None, height=dp(48), padding=dp(6),
+        top = BoxLayout(size_hint_y=None, height=dp(56), padding=dp(6),
                         spacing=dp(6))
-        self.scheme_spinner = Spinner(
-            text=self._scheme_label(0),
-            values=[self._scheme_label(i) for i in range(N_SCHEMES)],
-            font_size=dp(13))
-        self.scheme_spinner.bind(text=self._on_scheme_switch)
-        top.add_widget(Label(text="Схема:", size_hint_x=0.22, font_size=dp(14)))
-        top.add_widget(self.scheme_spinner)
-        clear_btn = Button(text="Очистить", size_hint_x=0.30, font_size=dp(13))
-        clear_btn.bind(on_release=lambda *a: self._clear_scheme())
-        top.add_widget(clear_btn)
-        root.add_widget(top)
+        self.scheme_row = ChoiceRow(
+            "Схема", [self._scheme_label(i) for i in range(N_SCHEMES)],
+            self._scheme_label(self.active), self._on_scheme_switch)
+        self.scheme_row.children[0].size_hint_x = 0.78
+        self.scheme_row.children[1].size_hint_x = 0.22
+        top.add_widget(self.scheme_row)
+        clear = RaisedButton("Очистить", on_tap=self._clear_scheme,
+                             size_hint_x=None, width=dp(96), font_size=dp(13))
+        top.add_widget(clear)
+        self.input_root.add_widget(top)
 
         self.form_scroll = ScrollView()
         self.form = GridLayout(cols=1, size_hint_y=None, padding=dp(8),
-                               spacing=dp(2))
+                               spacing=dp(8))
         self.form.bind(minimum_height=self.form.setter("height"))
         self.form_scroll.add_widget(self.form)
-        root.add_widget(self.form_scroll)
+        self.input_root.add_widget(self.form_scroll)
         self._build_form()
 
-        # Полоса с ключевыми результатами: видно отклик на правку параметра
-        # сразу, без перехода на вкладку «Результаты».
-        self.summary = BoxLayout(size_hint_y=None, height=dp(46),
-                                 padding=[dp(6), dp(2)], spacing=dp(4))
+        self.input_root.add_widget(self._build_summary())
+
+        bottom = BoxLayout(size_hint_y=None, height=dp(60), padding=dp(6),
+                           spacing=dp(6))
+        bottom.add_widget(RaisedButton("Сохранить", variant="primary",
+                                       on_tap=self._save))
+        bottom.add_widget(RaisedButton("Сбросить", on_tap=self._reset_all))
+        self.theme_btn = RaisedButton(
+            "Тема", on_tap=self._toggle_theme,
+            size_hint_x=None, width=dp(70), font_size=dp(13))
+        bottom.add_widget(self.theme_btn)
+        self.input_root.add_widget(bottom)
+
+    def _build_summary(self):
+        """Полоса ключевых чисел со светофором режима."""
+        box = BoxLayout(orientation="vertical", size_hint_y=None,
+                        height=dp(72), padding=[dp(8), dp(5)], spacing=dp(2))
+        row = BoxLayout(size_hint_y=0.62, spacing=dp(4))
         self.summary_labels = []
         for caption in ("Пятно на поверхности", "Плотность мощности",
                         "Погонная энергия"):
-            box = BoxLayout(orientation="vertical")
-            box.add_widget(Label(text=caption, font_size=dp(10),
-                                 color=(0.62, 0.66, 0.72, 1),
-                                 size_hint_y=0.42))
-            value = Label(text="—", font_size=dp(14), bold=True,
-                          size_hint_y=0.58)
+            col = BoxLayout(orientation="vertical")
+            col.add_widget(Label(text=caption, font_size=dp(10),
+                                 color=th.c("text_dim"), size_hint_y=0.42))
+            value = Label(text="—", font_size=dp(15), bold=True,
+                          color=th.c("text"), size_hint_y=0.58)
             self.summary_labels.append(value)
-            box.add_widget(value)
-            self.summary.add_widget(box)
-        root.add_widget(self.summary)
-
-        bottom = BoxLayout(size_hint_y=None, height=dp(52), padding=dp(6),
-                           spacing=dp(6))
-        save = Button(text="Сохранить", font_size=dp(14))
-        save.bind(on_release=lambda *a: self._save())
-        reset = Button(text="Сбросить всё", font_size=dp(14))
-        reset.bind(on_release=lambda *a: self._reset_all())
-        bottom.add_widget(save)
-        bottom.add_widget(reset)
-        root.add_widget(bottom)
-
-        tab.add_widget(root)
-        self.add_widget(tab)
-
-    def _on_field_focus(self, field, focused):
-        """
-        Прокрутка к полю, получившему фокус.
-
-        На Android экранная клавиатура закрывает нижнюю часть формы, и не
-        видно, что набираешь. Небольшая задержка нужна, чтобы клавиатура
-        успела появиться и высота видимой области пересчиталась.
-        """
-        if not focused:
-            return
-        Clock.schedule_once(
-            lambda *a: self.form_scroll.scroll_to(field, padding=dp(24)), 0.2)
+            col.add_widget(value)
+            row.add_widget(col)
+        box.add_widget(row)
+        self.mode_label = Label(text="", font_size=dp(11), markup=True,
+                                size_hint_y=0.38, color=th.c("text_dim"))
+        box.add_widget(self.mode_label)
+        return box
 
     def _scheme_setter(self, attr, cast=float):
         def setter(value):
             setattr(self.schemes[self.active], attr,
-                    _f(value) if cast is float else value)
+                    parse_number(value) if cast is float else value)
             self.refresh()
         return setter
 
     def _wp_setter(self, attr, cast=float):
         def setter(value):
             if cast is float:
-                setattr(self.workpiece, attr, _f(value))
+                setattr(self.workpiece, attr, parse_number(value))
             elif cast is int:
-                setattr(self.workpiece, attr, int(_f(value)))
+                setattr(self.workpiece, attr, int(parse_number(value)))
             elif cast is bool:
                 setattr(self.workpiece, attr, str(value) == "Да")
             else:
@@ -265,80 +263,79 @@ class MainUI(TabbedPanel):
         wp = self.workpiece
         self.scheme_fields = {}
 
-        # Поля, для которых осмысленно отрицательное значение
-        signed_attrs = {"focus_position_mm", "tilt_angle_deg"}
-
-        def add_scheme(caption, attr):
-            fld = Field(caption, getattr(s, attr), self._scheme_setter(attr),
-                        signed=attr in signed_attrs,
-                        on_focus=self._on_field_focus)
+        card = Card("Излучение и оптика")
+        for caption, attr, step, minimum, dec in SCHEME_FIELDS:
+            fld = StepperField(caption, getattr(s, attr),
+                               self._scheme_setter(attr), step=step,
+                               minimum=minimum, decimals=dec,
+                               on_focus=self._on_field_focus)
             self.scheme_fields[attr] = fld
-            self.form.add_widget(fld)
+            card.add_widget(fld)
+        self.form.add_widget(card)
 
-        def add_wp(caption, attr, signed=False, cast=float):
-            fld = Field(caption, getattr(wp, attr), self._wp_setter(attr, cast),
-                        signed=signed, on_focus=self._on_field_focus)
-            self.form.add_widget(fld)
+        card = Card("Режим обработки")
+        card.add_widget(StepperField(
+            "Скорость обработки", s.speed, self._scheme_setter("speed"),
+            step=0.1, minimum=0.0, decimals=2,
+            on_focus=self._on_field_focus))
+        card.add_widget(ChoiceRow("Единицы скорости", SPEED_UNITS,
+                                  s.speed_unit,
+                                  self._scheme_setter("speed_unit", str)))
+        card.add_widget(StepperField(
+            "Мощность излучения", s.power, self._scheme_setter("power"),
+            step=0.5, minimum=0.0, decimals=2,
+            on_focus=self._on_field_focus))
+        card.add_widget(ChoiceRow("Единицы мощности", POWER_UNITS,
+                                  s.power_unit,
+                                  self._scheme_setter("power_unit", str)))
+        self.form.add_widget(card)
 
-        self.form.add_widget(SectionLabel("Излучение и оптика"))
-        add_scheme("Длина волны, мкм", "wavelength_um")
-        add_scheme("Диаметр волокна, мкм", "fiber_diameter_um")
-        add_scheme("BPP, мм·мрад", "bpp_mm_mrad")
-        add_scheme("Коллиматор, мм", "collimator_mm")
-        add_scheme("Фокусатор, мм", "focusator_mm")
-        add_scheme("Положение фокуса, мм (+ над деталью)", "focus_position_mm")
-        add_scheme("Угол наклона луча, °", "tilt_angle_deg")
+        card = Card("Деталь и разделка")
+        card.add_widget(ChoiceRow("Рисовать деталь", ("Да", "Нет"),
+                                  "Да" if wp.draw_plate else "Нет",
+                                  self._wp_setter("draw_plate", bool)))
+        self._add_wp_fields(card, WP_PLATE)
+        self.form.add_widget(card)
 
-        self.form.add_widget(SectionLabel("Режим обработки"))
-        add_scheme("Скорость обработки", "speed")
-        self.speed_unit = ChoiceField(
-            "Единицы скорости", SPEED_UNITS, s.speed_unit,
-            self._scheme_setter("speed_unit", cast=str))
-        self.form.add_widget(self.speed_unit)
-        add_scheme("Мощность излучения", "power")
-        self.power_unit = ChoiceField(
-            "Единицы мощности", POWER_UNITS, s.power_unit,
-            self._scheme_setter("power_unit", cast=str))
-        self.form.add_widget(self.power_unit)
+        card = Card("Присадочная проволока")
+        card.add_widget(ChoiceRow("Количество проволок", ("0", "1", "2"),
+                                  str(wp.wire_count),
+                                  self._wp_setter("wire_count", int)))
+        self._add_wp_fields(card, WP_WIRE)
+        self.form.add_widget(card)
 
-        self.form.add_widget(SectionLabel("Деталь и разделка"))
-        add_wp("Толщина детали, мм", "thickness_mm")
-        self.form.add_widget(ChoiceField("Рисовать деталь", ("Да", "Нет"),
-                                         "Да" if wp.draw_plate else "Нет",
-                                         self._wp_setter("draw_plate", bool)))
-        add_wp("Ширина слева, мм", "width_left_mm")
-        add_wp("Ширина справа, мм", "width_right_mm")
-        add_wp("Зазор, мм", "gap_mm")
-        add_wp("Угол скоса левой кромки, °", "bevel_left_deg", signed=True)
-        add_wp("Угол скоса правой кромки, °", "bevel_right_deg", signed=True)
-        add_wp("Смещение стыка, мм", "joint_offset_mm", signed=True)
+        card = Card("Сопло для резки")
+        card.add_widget(ChoiceRow("Показывать сопло", ("Да", "Нет"),
+                                  "Да" if wp.draw_nozzle else "Нет",
+                                  self._wp_setter("draw_nozzle", bool)))
+        self._add_wp_fields(card, WP_NOZZLE)
+        self.form.add_widget(card)
 
-        self.form.add_widget(SectionLabel("Присадочная проволока"))
-        self.form.add_widget(ChoiceField(
-            "Количество проволок", ("0", "1", "2"), str(wp.wire_count),
-            self._wp_setter("wire_count", int)))
-        add_wp("Диаметр проволоки, мм", "wire_diameter_mm")
-        add_wp("Смещение проволоки, мм", "wire_offset_mm", signed=True)
+        card = Card("Построение и цель")
+        self._add_wp_fields(card, WP_VIEW)
+        self.form.add_widget(card)
 
-        self.form.add_widget(SectionLabel("Сопло для резки"))
-        self.form.add_widget(ChoiceField("Показывать сопло", ("Да", "Нет"),
-                                         "Да" if wp.draw_nozzle else "Нет",
-                                         self._wp_setter("draw_nozzle", bool)))
-        add_wp("Диаметр верхний, мм", "nozzle_d_upper_mm")
-        add_wp("Диаметр нижний, мм", "nozzle_d_lower_mm")
-        add_wp("Общая высота, мм", "nozzle_height_mm")
-        add_wp("Высота конуса, мм", "nozzle_cone_mm")
-        add_wp("Смещение сопла, мм", "nozzle_offset_mm", signed=True)
-        add_wp("Зазор сопло—деталь, мм", "nozzle_gap_mm")
+    def _add_wp_fields(self, card, spec):
+        for caption, attr, step, minimum, dec in spec:
+            card.add_widget(StepperField(
+                caption, getattr(self.workpiece, attr),
+                self._wp_setter(attr), step=step, minimum=minimum,
+                decimals=dec, on_focus=self._on_field_focus))
 
-        self.form.add_widget(SectionLabel("Построение и цель"))
-        add_wp("Требуемое пятно на поверхности, мм", "target_spot_mm")
-        add_wp("Максимальный Y для луча, мм", "y_max_mm", signed=True)
-        add_wp("Минимальный Y для луча, мм", "y_min_mm", signed=True)
+    def _on_field_focus(self, field, focused):
+        """
+        Прокрутка к полю, получившему фокус.
 
-    def _on_scheme_switch(self, spinner, text):
-        # Подписи пунктов обновляются вместе с параметрами, поэтому при
-        # программной установке текста флаг гасит повторную перестройку.
+        На Android экранная клавиатура закрывает нижнюю часть формы.
+        Задержка нужна, чтобы клавиатура успела появиться и высота
+        видимой области пересчиталась.
+        """
+        if not focused:
+            return
+        Clock.schedule_once(
+            lambda *a: self.form_scroll.scroll_to(field, padding=dp(24)), 0.2)
+
+    def _on_scheme_switch(self, text):
         if self._updating:
             return
         for i in range(N_SCHEMES):
@@ -348,12 +345,12 @@ class MainUI(TabbedPanel):
         self._build_form()
         self.refresh()
 
-    def _update_scheme_spinner(self):
+    def _update_scheme_row(self):
         self._updating = True
         try:
-            self.scheme_spinner.values = [
+            self.scheme_row.spinner.values = [
                 self._scheme_label(i) for i in range(N_SCHEMES)]
-            self.scheme_spinner.text = self._scheme_label(self.active)
+            self.scheme_row.spinner.text = self._scheme_label(self.active)
         finally:
             self._updating = False
 
@@ -365,7 +362,8 @@ class MainUI(TabbedPanel):
         self.refresh()
 
     def _reset_all(self):
-        self.schemes = [Scheme(name="Схема %d" % (i + 1)) for i in range(N_SCHEMES)]
+        self.schemes = [Scheme(name="Схема %d" % (i + 1))
+                        for i in range(N_SCHEMES)]
         for s in self.schemes[1:]:
             s.collimator_mm = 0.0
             s.focusator_mm = 0.0
@@ -374,73 +372,53 @@ class MainUI(TabbedPanel):
         self._build_form()
         self.refresh()
 
-    # ------------------------------------------------------------ результаты
+    def _toggle_theme(self):
+        th.set_mode("light" if th.mode() == "dark" else "dark")
+        self._save(silent=True)
+        self._prev_summary = ["", "", ""]
+        self._build()
 
-    def _build_result_tab(self):
-        tab = TabbedPanelItem(text="Результаты")
-        scroll = ScrollView()
+    # ----------------------------------------------------------- результаты
+
+    def _build_results(self):
+        self.result_root = ScrollView()
         self.result_box = GridLayout(cols=1, size_hint_y=None, padding=dp(10),
-                                     spacing=dp(4))
+                                     spacing=dp(6))
         self.result_box.bind(minimum_height=self.result_box.setter("height"))
-        scroll.add_widget(self.result_box)
-        tab.add_widget(scroll)
-        self.add_widget(tab)
+        self.result_root.add_widget(self.result_box)
 
     def _fill_results(self):
         self.result_box.clear_widgets()
-        rows = [
-            ("Диаметр пятна в фокусе, мм", "spot_focus_mm", "%.3f"),
-            ("Диаметр пятна на поверхности, мм", "spot_surface_mm", "%.3f"),
-            ("Диаметр пятна в корне шва, мм", "spot_root_mm", "%.3f"),
-            ("Длина перетяжки, мм", "waist_length_mm", "%.2f"),
-            ("Длина Рэлея, мм", "rayleigh_mm", "%.2f"),
-            ("Увеличение оптики", "magnification", "%.3f"),
-            ("Параметр M²", "m2", "%.2f"),
-            ("Расходимость (полный угол), мрад", "divergence_full_mrad", "%.1f"),
-            ("Диаметр пучка на линзе, мм", "beam_on_lens_mm", "%.2f"),
-            ("Сдвиг фокуса на 1 мм коллиматора, мм", "focus_shift_per_mm", "%.2f"),
-            ("Расфокусировка под заданное пятно, мм", "required_defocus_mm", "%.1f"),
-            ("Мощность, Вт", "power_w", "%.0f"),
-            ("Скорость, мм/с", "speed_mm_s", "%.2f"),
-            ("Плотность мощности в фокусе, Вт/см²", "power_density_focus", "%.3g"),
-            ("Плотность мощности на поверхности, Вт/см²",
-             "power_density_surface", "%.3g"),
-            ("Плотность мощности на линзе, Вт/см²", "power_density_lens", "%.3g"),
-            ("Погонная энергия, Дж/мм", "linear_energy_j_mm", "%.1f"),
-        ]
-
         results = [(i, calculate(s, self.workpiece))
                    for i, s in enumerate(self.schemes) if s.is_valid]
         if not results:
             self.result_box.add_widget(Label(
                 text="Заполните коллиматор и фокусатор хотя бы одной схемы",
-                size_hint_y=None, height=dp(60), font_size=dp(14)))
+                color=th.c("text_dim"), size_hint_y=None, height=dp(60),
+                font_size=dp(14)))
             return
 
-        # Таблица: первый столбец с названиями закреплён, столбцы схем
-        # прокручиваются вбок — иначе на экране телефона помещаются
-        # две-три схемы, а остальные сжимаются в нечитаемые колонки.
-        row_h = dp(33)
-        name_w = dp(178)
-        col_w = dp(118)
-        n_rows = len(rows) + 1
+        # Первый столбец с названиями закреплён, столбцы схем прокручиваются
+        # вбок. Межстрочный интервал у обоих одинаковый, иначе строки
+        # расходятся по вертикали тем сильнее, чем ниже.
+        row_h, gap = dp(33), dp(2)
+        name_w, col_w = dp(178), dp(122)
+        n_rows = len(RESULT_ROWS) + 1
+        total_h = (row_h + gap) * n_rows
 
-        table = BoxLayout(orientation="horizontal", size_hint_y=None,
-                          height=(row_h + dp(2)) * n_rows, spacing=dp(2))
-
-        # Межстрочный интервал обязан совпадать со столбцами значений,
-        # иначе строки расходятся по вертикали тем сильнее, чем ниже.
-        names = GridLayout(cols=1, size_hint=(None, None), spacing=dp(2),
-                           width=name_w, height=(row_h + dp(2)) * n_rows)
+        table = BoxLayout(size_hint_y=None, height=total_h, spacing=gap)
+        names = GridLayout(cols=1, size_hint=(None, None), spacing=gap,
+                           width=name_w, height=total_h)
         names.add_widget(Label(text="[b]Параметр[/b]", markup=True,
                                font_size=dp(12), halign="left",
                                valign="middle", size_hint_y=None,
-                               height=row_h,
+                               height=row_h, color=th.c("text"),
                                text_size=(name_w - dp(6), row_h)))
-        for caption, _attr, _fmt in rows:
+        for caption, _a, _f in RESULT_ROWS:
             names.add_widget(Label(
                 text=caption, font_size=dp(12), halign="left",
                 valign="middle", size_hint_y=None, height=row_h,
+                color=th.c("text_dim"),
                 text_size=(name_w - dp(6), row_h),
                 shorten=True, shorten_from="right"))
         table.add_widget(names)
@@ -448,66 +426,63 @@ class MainUI(TabbedPanel):
         hscroll = ScrollView(do_scroll_x=True, do_scroll_y=False,
                              bar_width=dp(3))
         values = GridLayout(cols=len(results), size_hint=(None, None),
-                            width=col_w * len(results),
-                            height=(row_h + dp(2)) * n_rows, spacing=dp(2))
+                            spacing=gap, width=col_w * len(results),
+                            height=total_h)
         for idx, _ in results:
-            col = SCHEME_COLORS[idx % len(SCHEME_COLORS)]
             values.add_widget(Label(
-                text="[b][color=%02x%02x%02x]%s[/color][/b]" % (
-                    int(col[0] * 255), int(col[1] * 255), int(col[2] * 255),
-                    self.schemes[idx].name),
+                text="[b][color=%s]•  %s[/color][/b]"
+                     % (th.scheme_markup(idx), self.schemes[idx].name),
                 markup=True, font_size=dp(12), size_hint_y=None,
                 height=row_h))
-        for _caption, attr, fmt in rows:
+        for _c, attr, fmt in RESULT_ROWS:
             for _, res in results:
                 value = getattr(res, attr)
                 values.add_widget(Label(
                     text="—" if value is None else fmt % value,
-                    font_size=dp(12), size_hint_y=None, height=row_h))
+                    color=th.c("text"), font_size=dp(12),
+                    size_hint_y=None, height=row_h))
         hscroll.add_widget(values)
         table.add_widget(hscroll)
         self.result_box.add_widget(table)
 
         if len(results) > 2:
             self.result_box.add_widget(Label(
-                text="[color=8a90a0]Столбцы схем прокручиваются вбок[/color]",
-                markup=True, font_size=dp(11), size_hint_y=None,
-                height=dp(22)))
+                text="Столбцы схем прокручиваются вбок",
+                color=th.c("text_dim"), font_size=dp(11),
+                size_hint_y=None, height=dp(22)))
 
         for idx, res in results:
             for w in res.warnings:
-                lbl = Label(text="[color=ffcc55]! %s: %s[/color]"
-                                 % (self.schemes[idx].name, w),
+                lbl = Label(text="[color=%s]!  %s: %s[/color]"
+                                 % (th.markup("warning"),
+                                    self.schemes[idx].name, w),
                             markup=True, size_hint_y=None, font_size=dp(12),
                             halign="left", valign="top")
                 lbl.bind(width=lambda i, v: setattr(i, "text_size", (v, None)),
-                         texture_size=lambda i, v: setattr(i, "height", v[1] + dp(8)))
+                         texture_size=lambda i, v: setattr(
+                             i, "height", v[1] + dp(8)))
                 self.result_box.add_widget(lbl)
 
-        export = Button(text="Выгрузить отчёт в CSV", size_hint_y=None,
-                        height=dp(46), font_size=dp(14))
-        export.bind(on_release=lambda *a: self._export_csv(rows, results))
+        export = RaisedButton("Выгрузить отчёт в CSV", variant="primary",
+                              size_hint_y=None, height=dp(th.TOUCH),
+                              on_tap=lambda: self._export_csv(results))
         self.result_box.add_widget(export)
 
     # ----------------------------------------------------------------- схема
 
-    def _build_view_tab(self):
-        tab = TabbedPanelItem(text="Схема")
-        root = BoxLayout(orientation="vertical")
+    def _build_view(self):
+        self.view_root = BoxLayout(orientation="vertical")
         self.view = BeamView()
-        root.add_widget(self.view)
-        bar = BoxLayout(size_hint_y=None, height=dp(48), padding=dp(6),
+        self.view_root.add_widget(self.view)
+        bar = BoxLayout(size_hint_y=None, height=dp(56), padding=dp(6),
                         spacing=dp(6))
-        for caption, factor in (("−", 1 / 1.3), ("+", 1.3)):
-            btn = Button(text=caption, font_size=dp(20))
-            btn.bind(on_release=lambda inst, f=factor: self._zoom(f))
-            bar.add_widget(btn)
-        fit = Button(text="Вписать", font_size=dp(14))
-        fit.bind(on_release=lambda *a: self.view.reset_view())
-        bar.add_widget(fit)
-        root.add_widget(bar)
-        tab.add_widget(root)
-        self.add_widget(tab)
+        bar.add_widget(RaisedButton("−", font_size=dp(20),
+                                    on_tap=lambda: self._zoom(1 / 1.3)))
+        bar.add_widget(RaisedButton("+", font_size=dp(20),
+                                    on_tap=lambda: self._zoom(1.3)))
+        bar.add_widget(RaisedButton("Вписать", variant="primary",
+                                    on_tap=lambda: self.view.reset_view()))
+        self.view_root.add_widget(bar)
 
     def _zoom(self, factor):
         self.view.zoom = max(0.2, min(self.view.zoom * factor, 40.0))
@@ -518,15 +493,15 @@ class MainUI(TabbedPanel):
     def refresh(self):
         self._fill_results()
         self._update_summary()
-        self._update_scheme_spinner()
+        self._update_scheme_row()
         self.view.update(self.schemes, self.workpiece)
 
     def _update_summary(self):
-        """Три ключевых числа для активной схемы в нижней полосе."""
         s = self.schemes[self.active]
         if not s.is_valid:
             for lbl in self.summary_labels:
                 lbl.text = "—"
+            self.mode_label.text = ""
             return
         r = calculate(s, self.workpiece)
         values = (
@@ -535,25 +510,35 @@ class MainUI(TabbedPanel):
             "%.0f Дж/мм" % r.linear_energy_j_mm
             if r.linear_energy_j_mm else "—",
         )
-        for lbl, text in zip(self.summary_labels, values):
-            lbl.text = text
+        for i, (lbl, text) in enumerate(zip(self.summary_labels, values)):
+            changed = text != self._prev_summary[i]
+            lbl.text = text          # присваиваем всегда: после смены темы
+            if changed:              # метки создаются заново и пусты
+                flash(lbl)
+        self._prev_summary = list(values)
 
-    # -------------------------------------------------------- сохранение
+        role, caption = th.density_level(r.power_density_surface)
+        self.mode_label.text = "[color=%s]•[/color]  %s" % (
+            th.markup(role), caption)
+
+    # ------------------------------------------------------------ сохранение
 
     @property
     def _state_path(self):
         return os.path.join(self.storage_dir, "state.json")
 
-    def _save(self):
+    def _save(self, silent=False):
         data = {
             "schemes": [s.to_dict() for s in self.schemes],
             "workpiece": self.workpiece.to_dict(),
+            "theme": th.mode(),
         }
         try:
             os.makedirs(self.storage_dir, exist_ok=True)
             with open(self._state_path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, ensure_ascii=False, indent=2)
-            self._toast("Параметры сохранены")
+            if not silent:
+                self._toast("Параметры сохранены")
         except OSError as exc:
             self._toast("Не удалось сохранить: %s" % exc)
 
@@ -566,29 +551,32 @@ class MainUI(TabbedPanel):
         try:
             self.schemes = [Scheme.from_dict(d) for d in data["schemes"]]
             self.workpiece = Workpiece.from_dict(data["workpiece"])
+            th.set_mode(data.get("theme", "dark"))
         except (KeyError, TypeError):
             pass
 
-    def _export_csv(self, rows, results):
+    def _export_csv(self, results):
         path = os.path.join(self.storage_dir, "raschet_optiki.csv")
         try:
             os.makedirs(self.storage_dir, exist_ok=True)
             with open(path, "w", encoding="utf-8-sig") as fh:
-                fh.write("Параметр;" +
-                         ";".join(self.schemes[i].name for i, _ in results) + "\n")
-                for caption, attr, fmt in rows:
+                fh.write("Параметр;" + ";".join(
+                    self.schemes[i].name for i, _ in results) + "\n")
+                for caption, attr, fmt in RESULT_ROWS:
                     cells = []
                     for _, res in results:
                         v = getattr(res, attr)
-                        cells.append("" if v is None else (fmt % v).replace(".", ","))
+                        cells.append("" if v is None
+                                     else (fmt % v).replace(".", ","))
                     fh.write("%s;%s\n" % (caption, ";".join(cells)))
             self._toast("Сохранено: %s" % path)
         except OSError as exc:
             self._toast("Ошибка выгрузки: %s" % exc)
 
     def _toast(self, text):
-        popup = Popup(title="", separator_height=0,
-                      content=Label(text=text, font_size=dp(13)),
-                      size_hint=(0.86, None), height=dp(140))
+        content = Label(text=text, font_size=dp(13), color=th.c("text"))
+        popup = Popup(title="", separator_height=0, content=content,
+                      size_hint=(0.86, None), height=dp(130),
+                      background_color=th.c("surface"))
         popup.open()
         Clock.schedule_once(lambda *a: popup.dismiss(), 1.8)

@@ -9,10 +9,15 @@ package.domain = ru.vpglaser
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
 source.include_patterns = app/*.py
-source.exclude_dirs = tests,.github,bin,.buildozer,p4a-recipes
+source.exclude_dirs = tests,.github,bin,.buildozer,p4a-recipes,tools
 source.exclude_patterns = tests/*,*.spec.bak
 
-version = 1.0.0
+version = 1.1.0
+
+# Иконка и заставка генерируются скриптом tools/make_icons.py в палитре
+# приложения — при правке цветов достаточно перезапустить его.
+icon.filename = %(source.dir)s/assets/icon.png
+presplash.filename = %(source.dir)s/assets/presplash.png
 
 # Зависимости: только Kivy, тяжёлых научных библиотек нет —
 # весь расчёт выполняется на чистом Python.

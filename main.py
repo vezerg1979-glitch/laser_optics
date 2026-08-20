@@ -12,6 +12,7 @@ from kivy.app import App
 from kivy.core.window import Window
 from kivy.utils import platform
 
+from app import theme
 from app.ui import MainUI
 
 
@@ -19,11 +20,14 @@ class LaserOpticsApp(App):
     title = "Расчёт фокусировки"
 
     def build(self):
-        Window.clearcolor = (0.07, 0.08, 0.10, 1)
         storage = self.user_data_dir
         if platform not in ("android", "ios"):
             storage = os.path.join(os.path.expanduser("~"), ".laser_optics")
-        return MainUI(storage_dir=storage)
+        ui = MainUI(storage_dir=storage)
+        # Цвет фона окна берётся из темы уже после загрузки сохранённого
+        # состояния, иначе при светлой теме по краям остаётся тёмная рамка.
+        Window.clearcolor = theme.c("bg")
+        return ui
 
     def on_pause(self):
         return True

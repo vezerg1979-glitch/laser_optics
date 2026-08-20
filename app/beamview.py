@@ -15,15 +15,13 @@ from kivy.uix.widget import Widget
 from kivy.core.text import Label as CoreLabel
 
 from . import geometry
+from . import theme as th
 from .optics import Scheme, Workpiece, caustic_points
 
-SCHEME_COLORS = [
-    (1.00, 0.30, 0.20),   # схема 1
-    (0.20, 0.70, 1.00),   # схема 2
-    (0.40, 0.90, 0.40),   # схема 3
-    (1.00, 0.80, 0.20),   # схема 4
-    (0.85, 0.45, 1.00),   # схема 5
-]
+
+def scheme_rgb(index):
+    """Цвет пучка схемы из общей палитры приложения."""
+    return th.scheme_color(index)[:3]
 
 
 def _triangulate(poly):
@@ -118,7 +116,7 @@ class BeamView(Widget):
         wp = self.workpiece
 
         with self.canvas:
-            Color(0.09, 0.10, 0.13)
+            Color(*th.c("bg"))
             Rectangle(pos=self.pos, size=self.size)
 
             self._draw_grid()
@@ -127,33 +125,33 @@ class BeamView(Widget):
             for poly in geometry.plate_polygons(wp):
                 verts, idx = _triangulate(poly)
                 if idx:
-                    Color(0.38, 0.40, 0.45)
+                    Color(*th.c("surface_alt"))
                     Mesh(vertices=self._mesh_verts(poly), indices=idx,
                          mode="triangles")
-                Color(0.75, 0.78, 0.82)
+                Color(*th.c("text_dim"))
                 Line(points=self._flat(poly + [poly[0]]), width=dp(1.2))
 
             # сопло
             for poly in geometry.nozzle_polygon(wp):
-                Color(0.30, 0.33, 0.40)
+                Color(*th.c("secondary_fill"))
                 verts, idx = _triangulate(poly)
                 if idx:
                     Mesh(vertices=self._mesh_verts(poly), indices=idx, mode="triangles")
-                Color(0.65, 0.70, 0.80)
+                Color(*th.c("text_dim"))
                 Line(points=self._flat(poly + [poly[0]]), width=dp(1.2))
 
             # проволока
             for poly in geometry.wire_circles(wp):
-                Color(0.85, 0.65, 0.30)
+                Color(*th.c("warning", 0.75))
                 verts, idx = _triangulate(poly)
                 if idx:
                     Mesh(vertices=self._mesh_verts(poly), indices=idx, mode="triangles")
-                Color(1.0, 0.85, 0.45)
+                Color(*th.c("warning"))
                 Line(points=self._flat(poly), width=dp(1.0))
 
             # пучки
             for i, sch in enumerate(self.schemes):
-                col = SCHEME_COLORS[i % len(SCHEME_COLORS)]
+                col = scheme_rgb(i)
                 left, right = caustic_points(sch, wp, n=200)
                 if not left:
                     continue
@@ -177,7 +175,7 @@ class BeamView(Widget):
                 Line(circle=(px, py, dp(5)), width=dp(1.4))
 
             # линия поверхности детали
-            Color(0.55, 0.60, 0.68, 0.9)
+            Color(*th.c("text_dim", 0.9))
             x1, y1 = self.to_px(-1e4, 0)
             x2, y2 = self.to_px(1e4, 0)
             Line(points=[max(x1, self.x), y1, min(x2, self.right), y2],
@@ -208,7 +206,7 @@ class BeamView(Widget):
             if span_mm / step <= 14:
                 break
         ox, oy = self._origin
-        Color(0.16, 0.18, 0.22)
+        Color(*th.c("border", 0.55))
         x_mm = int((self.x - ox) / self._scale / step) * step
         while True:
             px = ox + x_mm * self._scale
@@ -231,7 +229,7 @@ class BeamView(Widget):
         y = self.top - dp(18)
         with self.canvas.after:
             for i, sch in enumerate(self.schemes):
-                col = SCHEME_COLORS[i % len(SCHEME_COLORS)]
+                col = scheme_rgb(i)
                 Color(*col)
                 Line(points=[self.x + dp(10), y, self.x + dp(28), y], width=dp(2))
                 self._text(sch.name, self.x + dp(34), y - dp(8), col)
@@ -245,13 +243,13 @@ class BeamView(Widget):
                 length = step * self._scale
                 bx = self.right - dp(20) - length
                 by = self.y + dp(20)
-                Color(0.85, 0.88, 0.92)
+                Color(*th.c("text"))
                 Line(points=[bx, by, bx + length, by], width=dp(1.4))
                 Line(points=[bx, by - dp(4), bx, by + dp(4)], width=dp(1.2))
                 Line(points=[bx + length, by - dp(4), bx + length, by + dp(4)],
                      width=dp(1.2))
-                self._text("%d мм" % step, bx + length / 2 - dp(15), by + dp(6),
-                           (0.85, 0.88, 0.92))
+                self._text("%d мм" % step, bx + length / 2 - dp(15),
+                           by + dp(6), th.c("text")[:3])
 
     def _text(self, text, x, y, color):
         lbl = CoreLabel(text=text, font_size=dp(12))

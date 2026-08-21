@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.optics import Scheme, Workpiece, calculate, caustic_points  # noqa: E402
 from app.geometry import plate_polygons, nozzle_polygon, wire_circles  # noqa: E402
+from app import materials  # noqa: E402
 
 TOL = 1e-6
 
@@ -135,6 +136,175 @@ def test_nozzle_and_wire_geometry():
     assert len(circles) == 2
     for c in circles:
         assert min(p[1] for p in c) > -1e-9   # проволока лежит на поверхности
+
+
+# --- модель формы шва -------------------------------------------------------
+
+
+def _weld(material_key, power_kw, speed_m_min, thickness=20.0, dz=0.0):
+    s = Scheme(wavelength_um=1.07, fiber_diameter_um=200, bpp_mm_mrad=7.07,
+               collimator_mm=160, focusator_mm=300, focus_position_mm=dz,
+               power=power_kw, power_unit="кВт",
+               speed=speed_m_min, speed_unit="м/мин")
+    wp = Workpiece(thickness_mm=thickness, material_key=material_key)
+    return calculate(s, wp).weld
+
+
+def test_melting_enthalpy_matches_handbook():
+    """Объёмная энтальпия плавления: сталь ~10, алюминий ~3 Дж/мм³."""
+    approx(materials.get("steel_low_carbon").melting_enthalpy_j_mm3,
+           10.1, rel=0.05)
+    approx(materials.get("aluminium").melting_enthalpy_j_mm3, 3.0, rel=0.05)
+    approx(materials.get("titanium").melting_enthalpy_j_mm3, 7.0, rel=0.05)
+
+
+def test_reference_regimes_reproduced():
+    """Каждый материал воспроизводит свой опорный режим 10 кВт, 1,2 м/мин."""
+    expected = {
+        "steel_low_carbon": 16.0, "steel_low_alloy": 16.0,
+        "steel_austenitic": 18.0, "aluminium": 12.0,
+        "titanium": 20.0, "nickel_alloy": 17.0, "copper": 5.0,
+    }
+    for key, depth in expected.items():
+        got = _weld(key, 10.0, 1.2).depth_mm
+        assert abs(got - depth) <= 0.5 * max(1.0, depth * 0.05), (key, got)
+
+
+def test_depth_grows_with_power_and_falls_with_speed():
+    base = _weld("steel_low_alloy", 10.0, 1.2).depth_mm
+    assert _weld("steel_low_alloy", 15.0, 1.2).depth_mm > base
+    assert _weld("steel_low_alloy", 6.0, 1.2).depth_mm < base
+    assert _weld("steel_low_alloy", 10.0, 3.0).depth_mm < base
+
+
+def test_aspect_never_exceeds_material_limit():
+    """Отношение глубины к ширине ограничено — иначе жёсткая фокусировка
+    даёт нефизичные 30:1."""
+    for m in materials.MATERIALS:
+        for v in (0.5, 1.2, 4.0):
+            w = _weld(m.key, 12.0, v)
+            assert w.aspect <= m.max_aspect + 1e-6, (m.key, v, w.aspect)
+
+
+def test_conduction_mode_is_wide_and_shallow():
+    """Сильная расфокусировка уводит процесс из кинжального режима."""
+    tight = _weld("steel_low_alloy", 10.0, 1.2, dz=0.0)
+    wide = _weld("steel_low_alloy", 10.0, 1.2, dz=-60.0)
+    assert tight.mode == "кинжальный"
+    assert wide.mode == "теплопроводность"
+    assert wide.width_mm > tight.width_mm
+    assert wide.depth_mm < tight.depth_mm
+    assert wide.aspect <= 1.0 + 1e-6
+
+
+def test_full_penetration_speed_is_consistent():
+    """Пересчитанная скорость сквозного проплавления действительно его даёт."""
+    w = _weld("steel_low_alloy", 10.0, 1.2, thickness=10.0)
+    again = _weld("steel_low_alloy", 10.0, w.speed_full_m_min, thickness=10.0)
+    assert again.full_penetration
+    approx(again.depth_mm, 10.0, rel=0.02)
+
+
+def test_copper_needs_far_more_power_than_steel():
+    """Медь отражает и отводит тепло — проплавление многократно меньше."""
+    steel = _weld("steel_low_carbon", 10.0, 1.2).depth_mm
+    copper = _weld("copper", 10.0, 1.2).depth_mm
+    assert copper < 0.4 * steel
+
+
+def test_weld_absent_without_power():
+    s = Scheme(collimator_mm=160, focusator_mm=300, power=0.0)
+    w = calculate(s, Workpiece()).weld
+    assert w.depth_mm == 0.0
+    assert w.notes
+
+
+# --- термический цикл -------------------------------------------------------
+
+
+def _thermal(material_key="steel_low_alloy", power_kw=10.0, speed=1.2,
+             thickness=20.0, preheat=20.0, joint="Стыковой шов"):
+    s = Scheme(wavelength_um=1.07, fiber_diameter_um=200, bpp_mm_mrad=7.07,
+               collimator_mm=160, focusator_mm=300,
+               power=power_kw, power_unit="кВт",
+               speed=speed, speed_unit="м/мин")
+    wp = Workpiece(thickness_mm=thickness, material_key=material_key,
+                   preheat_c=preheat, joint_type=joint)
+    return calculate(s, wp).thermal
+
+
+def test_conductivity_matches_handbook():
+    """λ = a·ρ·c: сталь около 27, медь около 400 Вт/(м·К)."""
+    approx(materials.get("steel_low_carbon").conductivity_w_mmk * 1000,
+           27.0, rel=0.1)
+    approx(materials.get("copper").conductivity_w_mmk * 1000, 400.0, rel=0.1)
+
+
+def test_cooling_time_in_expected_range_for_laser():
+    """Лазерная сварка толстой стали даёт t8/5 порядка единиц секунд."""
+    t = _thermal().cooling_time_s
+    assert 0.5 < t < 5.0, t
+
+
+def test_cooling_rate_consistent_with_time():
+    r = _thermal()
+    approx(r.cooling_rate_k_s, 300.0 / r.cooling_time_s, rel=1e-9)
+
+
+def test_preheat_slows_cooling():
+    assert (_thermal(preheat=200.0).cooling_time_s
+            > _thermal(preheat=20.0).cooling_time_s)
+
+
+def test_speed_accelerates_cooling():
+    assert _thermal(speed=3.0).cooling_time_s < _thermal(speed=1.2).cooling_time_s
+
+
+def test_heat_flow_switches_at_transition_thickness():
+    """Толстая деталь — трёхмерный отвод, тонкая — двумерный."""
+    thick = _thermal(thickness=30.0)
+    assert thick.heat_flow == "трёхмерный"
+    thin = _thermal(thickness=0.5 * thick.transition_thickness_mm)
+    assert thin.heat_flow == "двумерный"
+    # При двумерном отводе тонкая деталь остывает медленнее
+    assert thin.cooling_time_s > thick.cooling_time_s
+
+
+def test_thin_plate_cooling_scales_with_thickness_squared():
+    """При двумерном отводе время охлаждения обратно квадрату толщины."""
+    base = _thermal(thickness=4.0)
+    half = _thermal(thickness=2.0)
+    assert base.heat_flow == half.heat_flow == "двумерный"
+    approx(half.cooling_time_s, base.cooling_time_s * 4.0, rel=1e-6)
+
+
+def test_joint_type_changes_cooling():
+    """У таврового шва больше путей отвода — охлаждение быстрее."""
+    butt = _thermal(joint="Стыковой шов").cooling_time_s
+    fillet = _thermal(joint="Тавровый шов").cooling_time_s
+    assert fillet < butt
+
+
+def test_haz_narrows_with_speed():
+    assert _thermal(speed=3.0).haz_width_mm < _thermal(speed=1.2).haz_width_mm
+
+
+def test_fast_cooling_warns_about_hardening():
+    notes = " ".join(_thermal(speed=6.0).notes)
+    assert "закалочные" in notes
+
+
+def test_preheat_above_interval_is_reported():
+    """Подогрев выше нижней границы интервала делает t8/5 бессмысленным."""
+    r = _thermal(preheat=520.0)
+    assert r.cooling_time_s == 0.0
+    assert any("не определено" in n for n in r.notes)
+
+
+def test_aluminium_uses_its_own_interval():
+    r = _thermal(material_key="aluminium")
+    assert r.cycle_name == "t4/3"
+    assert "400" in r.cycle_range
 
 
 if __name__ == "__main__":

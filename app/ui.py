@@ -15,6 +15,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 
+from . import materials
 from . import theme as th
 from .beamview import BeamView
 from .optics import POWER_UNITS, SPEED_UNITS, Scheme, Workpiece, calculate
@@ -90,7 +91,37 @@ RESULT_ROWS = [
      "power_density_surface", "%.3g"),
     ("Плотность мощности на линзе, Вт/см²", "power_density_lens", "%.3g"),
     ("Погонная энергия, Дж/мм", "linear_energy_j_mm", "%.1f"),
+    # Оценка формы шва. Точки в пути означают обращение к вложенному
+    # результату weld — см. get_value().
+    ("Материал", "weld.material_short", "%s"),
+    ("Режим сварки", "weld.mode", "%s"),
+    ("Глубина проплавления, мм", "weld.depth_mm", "%.1f"),
+    ("Ширина шва, мм", "weld.width_mm", "%.2f"),
+    ("Отношение глубина/ширина", "weld.aspect", "%.1f"),
+    ("Площадь сечения расплава, мм²", "weld.area_mm2", "%.2f"),
+    ("Поглощённая мощность, Вт", "weld.absorbed_w", "%.0f"),
+    ("Скорость сквозного проплавления, м/мин", "weld.speed_full_m_min",
+     "%.2f"),
+    # Термический цикл
+    ("Обозначение цикла", "thermal.cycle_name", "%s"),
+    ("Интервал охлаждения", "thermal.cycle_range", "%s"),
+    ("Время охлаждения, с", "thermal.cooling_time_s", "%.2f"),
+    ("Скорость охлаждения, К/с", "thermal.cooling_rate_k_s", "%.0f"),
+    ("Отвод тепла", "thermal.heat_flow", "%s"),
+    ("Граничная толщина, мм", "thermal.transition_thickness_mm", "%.1f"),
+    ("Ширина ЗТВ, мм", "thermal.haz_width_mm", "%.2f"),
+    ("Поглощённая погонная энергия, Дж/мм", "thermal.heat_input_j_mm", "%.0f"),
 ]
+
+
+def get_value(res, path):
+    """Значение по пути вида 'weld.depth_mm'."""
+    value = res
+    for part in path.split("."):
+        value = getattr(value, part, None)
+        if value is None:
+            return None
+    return value
 
 
 def fmt_density(value):
@@ -119,7 +150,7 @@ class MainUI(BoxLayout):
         self.active = 0
         self.section = 0
         self._updating = False
-        self._prev_summary = ["", "", ""]
+        self._prev_summary = ["", "", "", ""]
         self._load()
         self._build()
 
@@ -221,12 +252,12 @@ class MainUI(BoxLayout):
                         height=dp(72), padding=[dp(8), dp(5)], spacing=dp(2))
         row = BoxLayout(size_hint_y=0.62, spacing=dp(4))
         self.summary_labels = []
-        for caption in ("Пятно на поверхности", "Плотность мощности",
-                        "Погонная энергия"):
+        for caption in ("Пятно, мм", "Плотность мощности",
+                        "Проплавление", "Погонная энергия"):
             col = BoxLayout(orientation="vertical")
-            col.add_widget(Label(text=caption, font_size=dp(10),
+            col.add_widget(Label(text=caption, font_size=dp(9),
                                  color=th.c("text_dim"), size_hint_y=0.42))
-            value = Label(text="—", font_size=dp(15), bold=True,
+            value = Label(text="—", font_size=dp(14), bold=True,
                           color=th.c("text"), size_hint_y=0.58)
             self.summary_labels.append(value)
             col.add_widget(value)
@@ -291,6 +322,16 @@ class MainUI(BoxLayout):
         self.form.add_widget(card)
 
         card = Card("Деталь и разделка")
+        card.add_widget(ChoiceRow(
+            "Материал", materials.NAMES,
+            materials.get(wp.material_key).name, self._set_material))
+        card.add_widget(ChoiceRow(
+            "Тип соединения", materials.JOINT_NAMES, wp.joint_type,
+            self._wp_setter("joint_type", str)))
+        card.add_widget(StepperField(
+            "Подогрев, °C", wp.preheat_c, self._wp_setter("preheat_c"),
+            step=10.0, minimum=0.0, decimals=0,
+            on_focus=self._on_field_focus))
         card.add_widget(ChoiceRow("Рисовать деталь", ("Да", "Нет"),
                                   "Да" if wp.draw_plate else "Нет",
                                   self._wp_setter("draw_plate", bool)))
@@ -321,6 +362,10 @@ class MainUI(BoxLayout):
                 caption, getattr(self.workpiece, attr),
                 self._wp_setter(attr), step=step, minimum=minimum,
                 decimals=dec, on_focus=self._on_field_focus))
+
+    def _set_material(self, name):
+        self.workpiece.material_key = materials.by_name(name).key
+        self.refresh()
 
     def _on_field_focus(self, field, focused):
         """
@@ -375,7 +420,7 @@ class MainUI(BoxLayout):
     def _toggle_theme(self):
         th.set_mode("light" if th.mode() == "dark" else "dark")
         self._save(silent=True)
-        self._prev_summary = ["", "", ""]
+        self._prev_summary = ["", "", "", ""]
         self._build()
 
     # ----------------------------------------------------------- результаты
@@ -436,11 +481,16 @@ class MainUI(BoxLayout):
                 height=row_h))
         for _c, attr, fmt in RESULT_ROWS:
             for _, res in results:
-                value = getattr(res, attr)
+                value = get_value(res, attr)
+                # Текстовые значения приходится обрезать по ширине столбца,
+                # иначе длинное название материала налезает на соседний.
                 values.add_widget(Label(
                     text="—" if value is None else fmt % value,
                     color=th.c("text"), font_size=dp(12),
-                    size_hint_y=None, height=row_h))
+                    size_hint_y=None, height=row_h,
+                    text_size=(col_w - dp(6), row_h),
+                    halign="center", valign="middle",
+                    shorten=True, shorten_from="right"))
         hscroll.add_widget(values)
         table.add_widget(hscroll)
         self.result_box.add_widget(table)
@@ -452,7 +502,12 @@ class MainUI(BoxLayout):
                 size_hint_y=None, height=dp(22)))
 
         for idx, res in results:
-            for w in res.warnings:
+            notes = list(res.warnings)
+            if res.weld:
+                notes += res.weld.notes
+            if res.thermal:
+                notes += res.thermal.notes
+            for w in notes:
                 lbl = Label(text="[color=%s]!  %s: %s[/color]"
                                  % (th.markup("warning"),
                                     self.schemes[idx].name, w),
@@ -504,9 +559,11 @@ class MainUI(BoxLayout):
             self.mode_label.text = ""
             return
         r = calculate(s, self.workpiece)
+        weld = r.weld
         values = (
-            "%.3f мм" % r.spot_surface_mm,
+            "%.3f" % r.spot_surface_mm,
             fmt_density(r.power_density_surface),
+            "%.1f мм" % weld.depth_mm if weld and weld.depth_mm else "—",
             "%.0f Дж/мм" % r.linear_energy_j_mm
             if r.linear_energy_j_mm else "—",
         )
@@ -517,9 +574,20 @@ class MainUI(BoxLayout):
                 flash(lbl)
         self._prev_summary = list(values)
 
-        role, caption = th.density_level(r.power_density_surface)
-        self.mode_label.text = "[color=%s]•[/color]  %s" % (
-            th.markup(role), caption)
+        # Подпись под сводкой: режим сварки и достаточность проплавления.
+        # Цвет — по проплавлению, это то, что решает годность режима.
+        if weld and weld.depth_mm:
+            t = self.workpiece.thickness_mm
+            role = "success" if weld.full_penetration else "warning"
+            tail = ("сквозное" if weld.full_penetration
+                    else "не сквозное, нужно %.2f м/мин"
+                         % weld.speed_full_m_min)
+            self.mode_label.text = "[color=%s]•[/color]  %s: %.1f из %.0f мм — %s" % (
+                th.markup(role), weld.mode, weld.depth_mm, t, tail)
+        else:
+            role, caption = th.density_level(r.power_density_surface)
+            self.mode_label.text = "[color=%s]•[/color]  %s" % (
+                th.markup(role), caption)
 
     # ------------------------------------------------------------ сохранение
 
@@ -565,9 +633,13 @@ class MainUI(BoxLayout):
                 for caption, attr, fmt in RESULT_ROWS:
                     cells = []
                     for _, res in results:
-                        v = getattr(res, attr)
-                        cells.append("" if v is None
-                                     else (fmt % v).replace(".", ","))
+                        v = get_value(res, attr)
+                        if v is None:
+                            cells.append("")
+                        elif fmt == "%s":
+                            cells.append(str(v))
+                        else:
+                            cells.append((fmt % v).replace(".", ","))
                     fh.write("%s;%s\n" % (caption, ";".join(cells)))
             self._toast("Сохранено: %s" % path)
         except OSError as exc:
